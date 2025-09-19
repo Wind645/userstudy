@@ -8,6 +8,13 @@ const VIDEOS_DIR = path.join(ROOT, 'videos');
 const MANIFEST_PATH = path.join(VIDEOS_DIR, 'manifest.json');
 
 const exts = new Set(['.mp4', '.webm', '.ogg', '.mov', '.m4v']);
+// 为浏览器友好度排序（优先选择 mp4）
+const EXT_PRIORITY = ['.mp4', '.webm', '.ogg', '.m4v', '.mov'];
+function getExtPriority(filename) {
+  const e = path.extname(filename).toLowerCase();
+  const i = EXT_PRIORITY.indexOf(e);
+  return i === -1 ? 999 : i;
+}
 
 // 三个排序指标
 const attributes = [
@@ -34,10 +41,27 @@ function encodeSegmentsPosix(p) {
   return parts.map(encodeURIComponent).join('/');
 }
 // 简单分词与去复数
-function tokenize(s) {
-  return (String(s).toLowerCase().match(/[a-z0-9]+/g) || []);
-}
+function tokenize(s) { return (String(s).toLowerCase().match(/[a-z0-9]+/g) || []); }
 function stem(t) { return t.replace(/s$/, ''); }
+
+// 找到“最佳命中”：匹配度高者优先，同匹配度按扩展名优先级排序
+function findBestMatch(fileInfos, kind) {
+  const nk = normalizeKey(kind);
+  const exact = fileInfos.filter(x => x.key === nk);
+  const prefix = fileInfos.filter(x => x.key.startsWith(nk));
+  const kTokens = tokenize(kind).map(stem);
+  const tokenMatch = fileInfos.filter(x => {
+    const fTokens = tokenize(x.base).map(stem);
+    return kTokens.every(tk => fTokens.some(ft => ft.startsWith(tk)));
+  });
+  let candidates = exact.length ? exact : (prefix.length ? prefix : tokenMatch);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) =>
+    getExtPriority(a.file) - getExtPriority(b.file) ||
+    a.file.localeCompare(b.file, 'en')
+  );
+  return candidates[0];
+}
 
 async function listVideos(dir) {
   const items = await fs.readdir(dir, { withFileTypes: true });
@@ -84,22 +108,13 @@ async function main() {
     const files = await listVideos(folderDir);
     if (files.length === 0) continue;
 
-    // 放宽匹配：精确(normalized)优先 -> 前缀 -> 分词+去复数模糊包含
     const fileInfos = files.map(f => ({ file: f, base: baseNoExt(f), key: normalizeKey(baseNoExt(f)) }));
     for (const kind of KINDS) {
-      const nk = normalizeKey(kind);
-      let hit = fileInfos.find(x => x.key === nk)
-             || fileInfos.find(x => x.key.startsWith(nk));
-      if (!hit) {
-        const kTokens = tokenize(kind).map(stem);
-        hit = fileInfos.find(x => {
-          const fTokens = tokenize(x.base).map(stem);
-          return kTokens.every(tk => fTokens.some(ft => ft.startsWith(tk)));
-        });
-      }
+      const hit = findBestMatch(fileInfos, kind);
       if (!hit) continue;
+      const ext = path.extname(hit.file).toLowerCase();
       const src = encodeSegmentsPosix(path.join('videos', folder, hit.file));
-      kindToCandidates.get(kind).push({ id: folder, src });
+      kindToCandidates.get(kind).push({ id: folder, src, ext });
     }
   }
 

@@ -112,15 +112,20 @@
       </div>
     `;
 
-    // 候选视频展示（仅标号，不显示文件夹名）
+    // 候选视频展示（带 MIME，便于浏览器选择解码）
     const candidatesHtml = `
       <div class="videos">
-        ${q.candidates.map((c, i) => `
+        ${q.candidates.map((c, i) => {
+          const mime = getMimeByExt(c.ext);
+          const cid = escapeHtml(c.id + '|' + c.src);
+          return `
           <div class="video-card">
             <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">视频 ${i + 1}</div>
-            <video controls preload="metadata" src="${c.src}" data-cid="${escapeHtml(c.id + '|' + c.src)}"></video>
-          </div>
-        `).join('')}
+            <video controls preload="metadata" data-cid="${cid}" data-ext="${escapeHtml(c.ext || '')}">
+              <source src="${c.src}"${mime ? ` type="${mime}"` : ''} />
+            </video>
+          </div>`;
+        }).join('')}
       </div>
     `;
 
@@ -146,17 +151,48 @@
       ${rankSectionsHtml}
     `;
 
-    // 视频加载失败时保留占位
+    // 视频加载失败时保留占位 + 兼容性检测
     attachVideoErrorHandlers(q);
+    attachVideoCompatibilityHints();
 
     // 绑定拖拽
     attributes.forEach(attr => bindRankDnD(kind, attr.key, q));
     updateNavButtons();
   }
 
+  // 按扩展名提供 MIME
+  function getMimeByExt(ext) {
+    switch ((ext || '').toLowerCase()) {
+      case '.mp4': return 'video/mp4';
+      case '.m4v': return 'video/mp4';
+      case '.webm': return 'video/webm';
+      case '.ogg': return 'video/ogg';
+      case '.mov': return 'video/quicktime';
+      default: return '';
+    }
+  }
+
+  // 基于 canPlayType 的兼容性提示（例如 .mov 在多数浏览器上不可播放）
+  function attachVideoCompatibilityHints() {
+    document.querySelectorAll('.videos .video-card video').forEach(v => {
+      const ext = (v.dataset.ext || '').toLowerCase();
+      const mime = getMimeByExt(ext);
+      if (!mime) return;
+      const support = v.canPlayType ? v.canPlayType(mime) : '';
+      if (!support) {
+        const wrap = v.parentElement;
+        if (!wrap) return;
+        wrap.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:center;height:180px;background:#000;border-radius:8px;color:#ff9c9c;font-size:12px;text-align:center;padding:8px;">
+            当前浏览器不支持该视频格式（${ext || '未知'}）。建议提供 MP4。
+          </div>
+        `;
+      }
+    });
+  }
+
   // 当候选或参考视频加载失败时的处理（不再删除候选）
   function attachVideoErrorHandlers(q) {
-    // 候选视频：加载失败，用占位文本替代，保留排序项
     document.querySelectorAll('.videos .video-card video').forEach(v => {
       v.addEventListener('error', () => {
         const wrap = v.parentElement;
