@@ -118,7 +118,7 @@
         ${q.candidates.map((c, i) => `
           <div class="video-card">
             <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">视频 ${i + 1}</div>
-            <video controls preload="metadata" src="${encodeURI(c.src)}"></video>
+            <video controls preload="metadata" src="${encodeURI(c.src)}" data-cid="${escapeHtml(c.id + '|' + c.src)}"></video>
           </div>
         `).join('')}
       </div>
@@ -146,9 +146,49 @@
       ${rankSectionsHtml}
     `;
 
+    // 绑定视频加载失败处理：剔除无效候选，避免空位
+    attachVideoErrorHandlers(q);
+
     // 绑定拖拽
     attributes.forEach(attr => bindRankDnD(kind, attr.key, q));
     updateNavButtons();
+  }
+
+  // 当候选或参考视频加载失败时的处理
+  function attachVideoErrorHandlers(q) {
+    // 候选视频：加载失败即从候选与排序中移除并重绘
+    document.querySelectorAll('.videos .video-card video').forEach(v => {
+      v.addEventListener('error', () => {
+        const cid = v.dataset.cid;
+        if (!cid) return;
+        const kind = q.kind;
+
+        // 从候选中移除
+        const idx = q.candidates.findIndex(c => (c.id + '|' + c.src) === cid);
+        if (idx === -1) return;
+        q.candidates.splice(idx, 1);
+
+        // 从各排序列表中移除
+        for (const attr of attributes) {
+          const arr = responses[kind]?.rankings?.[attr.key];
+          if (Array.isArray(arr)) {
+            responses[kind].rankings[attr.key] = arr.filter(x => x !== cid);
+          }
+        }
+
+        saveState();
+        render();
+      }, { once: true });
+    });
+
+    // 参考视频：加载失败给出提示
+    const inputVideo = document.querySelector('.pair .video-card video');
+    if (inputVideo) {
+      inputVideo.addEventListener('error', () => {
+        const wrap = inputVideo.parentElement;
+        if (wrap) wrap.innerHTML = '<div style="color:#97a6ba;font-size:12px;">参考视频加载失败</div>';
+      }, { once: true });
+    }
   }
 
   function rankSectionHtml(kind, attr, q) {

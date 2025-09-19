@@ -35,19 +35,26 @@ async function main() {
 
   const entries = await fs.readdir(VIDEOS_DIR, { withFileTypes: true });
 
-  // 收集 input 参考
-  const INPUT_DIR = path.join(VIDEOS_DIR, 'input');
-  const hasInput = entries.some(e => e.isDirectory() && e.name === 'input');
+  // 收集 input 参考（大小写不敏感）
+  const dirEntries = entries.filter(e => e.isDirectory());
+  const inputEntry = dirEntries.find(e => e.name.toLowerCase() === 'input');
+  const inputDirName = inputEntry?.name;
+  const hasInput = !!inputDirName;
+  const INPUT_DIR = hasInput ? path.join(VIDEOS_DIR, inputDirName) : null;
   const inputMap = new Map();
   if (hasInput) {
     const inputFiles = await listVideos(INPUT_DIR);
-    for (const f of inputFiles) inputMap.set(baseNoExt(f), toPosix(path.join('videos', 'input', f)));
+    for (const f of inputFiles) inputMap.set(baseNoExt(f), toPosix(path.join('videos', inputDirName, f)));
   } else {
-    console.warn('[warn] 未发现 videos/input 目录，将无法展示参考视频。');
+    console.warn('[warn] 未发现 videos/input 目录（大小写不敏感），将无法展示参考视频。');
   }
 
-  // 候选来源目录（排除 input）
-  const folders = entries.filter(e => e.isDirectory() && e.name !== 'input').map(e => e.name).sort();
+  // 候选来源目录（排除 input，大小写不敏感）
+  const folders = dirEntries
+    .map(e => e.name)
+    .filter(name => name.toLowerCase() !== 'input')
+    .sort((a, b) => a.localeCompare(b, 'en'));
+
   const kindToCandidates = new Map(KINDS.map(k => [k, []]));
 
   // 遍历每个子文件夹，将四类视频分发到对应类别的候选池
