@@ -105,7 +105,7 @@
           <div class="video-card">
             <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">Input</div>
             ${q.input
-              ? `<video controls preload="metadata" src="${encodeURI(q.input)}"></video>`
+              ? `<video controls preload="metadata" src="${q.input}"></video>`
               : `<div style="color:#97a6ba;font-size:12px;">未找到对应 input 视频</div>`}
           </div>
         </div>
@@ -118,7 +118,7 @@
         ${q.candidates.map((c, i) => `
           <div class="video-card">
             <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">视频 ${i + 1}</div>
-            <video controls preload="metadata" src="${encodeURI(c.src)}" data-cid="${escapeHtml(c.id + '|' + c.src)}"></video>
+            <video controls preload="metadata" src="${c.src}" data-cid="${escapeHtml(c.id + '|' + c.src)}"></video>
           </div>
         `).join('')}
       </div>

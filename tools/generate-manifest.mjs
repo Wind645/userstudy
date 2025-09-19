@@ -28,6 +28,16 @@ function normalizeKey(s) {
     .replace(/\(\d+\)|\[\d+\]/g, '')  // 去掉(1)/[1]等
     .replace(/copy|副本/g, '');       // 常见复制后缀
 }
+// 逐段进行 URL 编码，避免 #、%、? 等导致的截断或 404
+function encodeSegmentsPosix(p) {
+  const parts = toPosix(p).split('/').filter(Boolean);
+  return parts.map(encodeURIComponent).join('/');
+}
+// 简单分词与去复数
+function tokenize(s) {
+  return (String(s).toLowerCase().match(/[a-z0-9]+/g) || []);
+}
+function stem(t) { return t.replace(/s$/, ''); }
 
 async function listVideos(dir) {
   const items = await fs.readdir(dir, { withFileTypes: true });
@@ -51,7 +61,11 @@ async function main() {
   const inputMap = new Map();
   if (hasInput) {
     const inputFiles = await listVideos(INPUT_DIR);
-    for (const f of inputFiles) inputMap.set(baseNoExt(f), toPosix(path.join('videos', inputDirName, f)));
+    for (const f of inputFiles) {
+      const key = normalizeKey(baseNoExt(f)); // 用归一化键
+      const src = encodeSegmentsPosix(path.join('videos', inputDirName, f));
+      inputMap.set(key, src);
+    }
   } else {
     console.warn('[warn] 未发现 videos/input 目录（大小写不敏感），将无法展示参考视频。');
   }
@@ -70,15 +84,21 @@ async function main() {
     const files = await listVideos(folderDir);
     if (files.length === 0) continue;
 
-    // 放宽匹配：精确(normalized)优先，否则接受以类别名为前缀的匹配
+    // 放宽匹配：精确(normalized)优先 -> 前缀 -> 分词+去复数模糊包含
     const fileInfos = files.map(f => ({ file: f, base: baseNoExt(f), key: normalizeKey(baseNoExt(f)) }));
     for (const kind of KINDS) {
       const nk = normalizeKey(kind);
-      const exact = fileInfos.find(x => x.key === nk);
-      const prefix = exact || fileInfos.find(x => x.key.startsWith(nk));
-      const hit = prefix;
+      let hit = fileInfos.find(x => x.key === nk)
+             || fileInfos.find(x => x.key.startsWith(nk));
+      if (!hit) {
+        const kTokens = tokenize(kind).map(stem);
+        hit = fileInfos.find(x => {
+          const fTokens = tokenize(x.base).map(stem);
+          return kTokens.every(tk => fTokens.some(ft => ft.startsWith(tk)));
+        });
+      }
       if (!hit) continue;
-      const src = toPosix(path.join('videos', folder, hit.file));
+      const src = encodeSegmentsPosix(path.join('videos', folder, hit.file));
       kindToCandidates.get(kind).push({ id: folder, src });
     }
   }
@@ -86,7 +106,7 @@ async function main() {
   // 组装四道题：每题至多取 8 个候选
   const questions = KINDS.map(kind => {
     const candidates = (kindToCandidates.get(kind) || []).slice(0, 8);
-    const input = inputMap.get(kind) || null;
+    const input = inputMap.get(normalizeKey(kind)) || null; // 用归一化键取 input
     return { id: kind, kind, input, candidates };
   });
 
