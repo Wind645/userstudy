@@ -15,11 +15,18 @@
   let current = 0;
   let responses = {};
   let attributes = [];
+  let prompts = {};
 
   init();
 
   async function init() {
     loadState();
+
+    // 读取 prompts.json（可选）
+    try {
+      prompts = await fetch('prompts.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : {});
+    } catch { prompts = {}; }
+
     try {
       manifest = await fetch('videos/manifest.json', { cache: 'no-store' }).then(r => r.json());
     } catch (e) {
@@ -28,34 +35,41 @@
       return;
     }
 
-    attributes = Array.isArray(manifest.attributes) ? manifest.attributes : defaultAttributes();
+    // 使用后端提供的 3 个维度；否则降级为默认
+    attributes = Array.isArray(manifest.attributes) && manifest.attributes.length
+      ? manifest.attributes
+      : defaultAttributes();
+
     if (!Array.isArray(manifest.questions) || manifest.questions.length === 0) {
-      setProgress('未检测到题目（videos 下没有包含视频的子文件夹）。');
+      setProgress('未检测到题目（videos 下没有包含视频的子文件夹，或仅有 input）。');
       disableAll(true);
       return;
     }
 
-    // 规范化
+    // 规范化：确保 pairs 存在
     manifest.questions = manifest.questions.map(q => ({
       id: String(q.id),
-      videos: (q.videos || []).slice(0, 4)
-    }));
+      pairs: Array.isArray(q.pairs) ? q.pairs.slice(0, 4) : []
+    })).filter(q => q.pairs.length > 0);
 
-    // 修正 current 越界
+    if (manifest.questions.length === 0) {
+      setProgress('没有可用的配对视频。请检查各题目目录与 input 是否包含同名文件。');
+      disableAll(true);
+      return;
+    }
+
     if (current < 0) current = 0;
     if (current >= manifest.questions.length) current = manifest.questions.length - 1;
 
-    // 初次渲染
     render();
     hookNav();
   }
 
   function defaultAttributes() {
     return [
-      { key: 'clarity', label: '清晰度', desc: '画面细节是否清楚、锐利' },
-      { key: 'stability', label: '稳定性', desc: '播放是否流畅、无明显卡顿' },
-      { key: 'color', label: '色彩', desc: '颜色是否自然、对比度是否合适' },
-      { key: 'audio', label: '音质', desc: '声音是否清晰、无噪声' },
+      { key: 'motion_preservation', label: 'motion preservation', desc: '动作保留程度（1=最好，7=最差）' },
+      { key: 'text_alignment', label: 'text alignment', desc: '视频文本对齐程度（1=最好，7=最差）' },
+      { key: 'generation_quality', label: 'generation quality', desc: '视频生成质量（1=最好，7=最差）' },
     ];
   }
 
@@ -71,14 +85,39 @@
       </div>
     `;
 
-    const videosHtml = `
-      <div class="videos">
-        ${q.videos.map((src, idx) => `
-          <div class="video-card">
-            <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">视频 ${idx + 1}</div>
-            <video controls preload="metadata" src="${encodeURI(src)}"></video>
-          </div>
-        `).join('')}
+    // 每个配对：上方显示 prompt；下方两列视频（左 input，右 target）
+    const pairsHtml = `
+      <div>
+        ${q.pairs.map((p, idx) => {
+          const key = String(p.key || inferKey(p));
+          const prompt = prompts[key] || '';
+          const inputHtml = p.input ? `
+            <div class="video-card">
+              <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">Input（${escapeHtml(key)}）</div>
+              <video controls preload="metadata" src="${encodeURI(p.input)}"></video>
+            </div>
+          ` : `
+            <div class="video-card">
+              <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">Input 缺失（${escapeHtml(key)}）</div>
+              <div style="color:#97a6ba;font-size:12px;">未找到对应 input 视频</div>
+            </div>
+          `;
+          const targetHtml = `
+            <div class="video-card">
+              <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">题目视频（${escapeHtml(key)}）</div>
+              <video controls preload="metadata" src="${encodeURI(p.target)}"></video>
+            </div>
+          `;
+          return `
+            <div class="pair">
+              <div class="pair-title">Prompt：${escapeHtml(prompt)}</div>
+              <div class="pair-videos">
+                ${inputHtml}
+                ${targetHtml}
+              </div>
+            </div>
+          `;
+        }).join('')}
       </div>
     `;
 
@@ -96,7 +135,7 @@
             <div class="attr-row" data-attr="${attr.key}">
               <div class="attr-head">
                 <span class="attr-label">${escapeHtml(attr.label)}</span>
-                <span class="attr-desc">${escapeHtml(attr.desc || '')}</span>
+                <span class="attr-desc">${escapeHtml(attr.desc || '（1=最好，7=最差）')}</span>
               </div>
               <div class="scale">${buttons}</div>
             </div>
@@ -107,11 +146,10 @@
 
     els.q.innerHTML = `
       ${titleHtml}
-      ${videosHtml}
+      ${pairsHtml}
       ${attrsHtml}
     `;
 
-    // 绑定评分点击
     els.q.querySelectorAll('.attr-row').forEach(row => {
       const key = row.getAttribute('data-attr');
       row.querySelectorAll('.scale .btn').forEach(btn => {
@@ -122,18 +160,23 @@
       });
     });
 
-    // 更新导航按钮状态与文案
     updateNavButtons();
+  }
+
+  function inferKey(p) {
+    // 从 target 路径推断 key（去扩展名的文件名）
+    try {
+      const parts = String(p.target || '').split('/');
+      const f = parts[parts.length - 1] || '';
+      return f.split('.').slice(0, -1).join('.');
+    } catch { return ''; }
   }
 
   function selectScore(qid, attrKey, score, row, btn) {
     if (!responses[qid]) responses[qid] = {};
     responses[qid][attrKey] = score;
-
-    // 单选高亮
     row.querySelectorAll('.scale .btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
-
     saveState();
     updateNavButtons();
   }
@@ -152,11 +195,10 @@
       }
     });
 
-    els.next.addEventListener('click', () => {
+    els.next.addEventListener('click', async () => {
       const isLast = current === manifest.questions.length - 1;
       if (isLast) {
-        // 进入导出
-        doExport();
+        await doSubmit();
       } else {
         current += 1;
         saveState();
@@ -164,7 +206,8 @@
       }
     });
 
-    els.exportBtn.addEventListener('click', () => doExport());
+    // 导出按钮不再使用
+    els.exportBtn.style.display = 'none';
   }
 
   function updateNavButtons() {
@@ -174,32 +217,44 @@
 
     els.prev.disabled = isFirst;
     els.next.disabled = !allAttributesScored(qid);
-    els.next.textContent = isLast ? '完成并导出' : '下一题';
-
-    els.exportBtn.style.display = isLast && allAttributesScored(qid) ? 'inline-block' : 'none';
+    els.next.textContent = isLast ? '提交' : '下一题';
   }
 
-  function doExport() {
+  async function doSubmit() {
     const payload = {
       meta: {
         generatedAt: new Date().toISOString(),
         totalQuestions: manifest.questions.length,
         attributes,
         questions: manifest.questions.map(q => q.id),
+        userAgent: navigator.userAgent,
       },
       responses,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.download = `survey-results-${ts()}.json`;
-    a.href = url;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(url);
-      a.remove();
-    }, 100);
+
+    try {
+      const fd = new FormData();
+      fd.append('form-name', 'video-survey');
+      fd.append('payload', JSON.stringify(payload));
+
+      await fetch('/', { method: 'POST', body: fd });
+
+      // 清理并提示
+      localStorage.removeItem(STORAGE_RESP);
+      localStorage.removeItem(STORAGE_INDEX);
+      setProgress('已提交，感谢参与！');
+      els.q.innerHTML = `
+        <div class="q-title">
+          <h2>提交成功</h2>
+          <span class="qid">数据已保存到 Netlify 后台（Forms）。</span>
+        </div>
+      `;
+      els.prev.disabled = true;
+      els.next.disabled = true;
+    } catch (e) {
+      alert('提交失败，请稍后重试。');
+      console.error('submit error:', e);
+    }
   }
 
   function loadState() {
@@ -218,13 +273,9 @@
     } catch {}
   }
 
-  function setProgress(text) {
-    els.progress.textContent = text;
-  }
+  function setProgress(text) { els.progress.textContent = text; }
 
-  function disableAll(disabled) {
-    [els.prev, els.next, els.exportBtn].forEach(b => b.disabled = !!disabled);
-  }
+  function disableAll(disabled) { [els.prev, els.next, els.exportBtn].forEach(b => b.disabled = !!disabled); }
 
   function escapeHtml(s) {
     return String(s)
@@ -233,11 +284,5 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#39;');
-  }
-
-  function ts() {
-    const d = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   }
 })();

@@ -121,6 +121,26 @@ video {
   box-shadow: 0 0 0 2px rgba(58,133,255,0.25);
 }
 
+.pair {
+  background: rgba(255,255,255,0.02);
+  border: 1px dashed rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.pair-title {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.pair-videos {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+/* 小屏单列展示 */
 @media (max-width: 800px) {
+  .pair-videos { grid-template-columns: 1fr; }
   .videos { grid-template-columns: 1fr; }
 }
