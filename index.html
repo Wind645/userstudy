@@ -23,7 +23,11 @@
       <button id="exportBtn" class="btn" style="display:none">导出结果(JSON)</button>
     </nav>
 
-    <form name="video-survey" data-netlify="true" netlify hidden>
+    <form name="video-survey" data-netlify="true" netlify method="POST" netlify-honeypot="bot-field" hidden>
+      <input type="hidden" name="form-name" value="video-survey" />
+      <p hidden>
+        <label>别填写这个字段：<input name="bot-field" /></label>
+      </p>
       <input type="text" name="payload" />
     </form>
   </main>
