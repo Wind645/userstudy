@@ -8,8 +8,15 @@
     exportBtn: document.getElementById('exportBtn'),
   };
 
-  const STORAGE_RESP = 'surveyResponses.v1';
-  const STORAGE_INDEX = 'surveyCurrentIndex.v1';
+  const STORAGE_RESP = 'surveyResponses.v2';
+  const STORAGE_INDEX = 'surveyCurrentIndex.v2';
+
+  const KIND_LABELS = {
+    camera_motion: 'Camera Motion',
+    complex_human_motion: 'Complex Human Motion',
+    single_object: 'Single Object',
+    multiple_objects: 'Multiple Objects',
+  };
 
   let manifest = null;
   let current = 0;
@@ -22,38 +29,40 @@
   async function init() {
     loadState();
 
-    // 读取 prompts.json（可选）
+    // 读取 prompts.json
     try {
       prompts = await fetch('prompts.json', { cache: 'no-store' }).then(r => r.ok ? r.json() : {});
     } catch { prompts = {}; }
 
+    // 读取 manifest
     try {
       manifest = await fetch('videos/manifest.json', { cache: 'no-store' }).then(r => r.json());
-    } catch (e) {
-      setProgress('未找到 videos/manifest.json，请先放入视频并执行构建生成清单。');
+    } catch {
+      setProgress('未找到 videos/manifest.json，请先执行构建。');
       disableAll(true);
       return;
     }
 
-    // 使用后端提供的 3 个维度；否则降级为默认
+    // 3 个排序指标
     attributes = Array.isArray(manifest.attributes) && manifest.attributes.length
       ? manifest.attributes
       : defaultAttributes();
 
+    // 格式化题目：每题包含 kind、input、candidates
     if (!Array.isArray(manifest.questions) || manifest.questions.length === 0) {
-      setProgress('未检测到题目（videos 下没有包含视频的子文件夹，或仅有 input）。');
+      setProgress('未检测到题目。');
       disableAll(true);
       return;
     }
-
-    // 规范化：确保 pairs 存在
     manifest.questions = manifest.questions.map(q => ({
       id: String(q.id),
-      pairs: Array.isArray(q.pairs) ? q.pairs.slice(0, 4) : []
-    })).filter(q => q.pairs.length > 0);
+      kind: String(q.kind || q.id),
+      input: q.input || null,
+      candidates: Array.isArray(q.candidates) ? q.candidates.slice(0, 8) : [],
+    })).filter(q => q.candidates.length > 0);
 
     if (manifest.questions.length === 0) {
-      setProgress('没有可用的配对视频。请检查各题目目录与 input 是否包含同名文件。');
+      setProgress('没有可用候选视频，请检查子文件夹与文件命名。');
       disableAll(true);
       return;
     }
@@ -67,123 +76,161 @@
 
   function defaultAttributes() {
     return [
-      { key: 'motion_preservation', label: 'motion preservation', desc: '动作保留程度（1=最好，7=最差）' },
-      { key: 'text_alignment', label: 'text alignment', desc: '视频文本对齐程度（1=最好，7=最差）' },
-      { key: 'generation_quality', label: 'generation quality', desc: '视频生成质量（1=最好，7=最差）' },
+      { key: 'motion_preservation', label: 'motion preservation', desc: '动作迁移程度（1=最好，N=最差）' },
+      { key: 'text_alignment', label: 'text alignment', desc: '视频文本对齐程度（1=最好，N=最差）' },
+      { key: 'generation_quality', label: 'generation quality', desc: '视频生成质量（1=最好，N=最差）' },
     ];
   }
 
   function render() {
     const total = manifest.questions.length;
     const q = manifest.questions[current];
+    const kind = q.kind;
+    const N = q.candidates.length;
+
     setProgress(`进度：${current + 1} / ${total}`);
 
     const titleHtml = `
       <div class="q-title">
-        <h2>题目 ${current + 1}</h2>
-        <span class="qid">ID：${escapeHtml(q.id)}</span>
+        <h2>题目 ${current + 1}：${escapeHtml(KIND_LABELS[kind] || kind)}</h2>
+        <span class="qid">类别ID：${escapeHtml(kind)}</span>
       </div>
     `;
 
-    // 每个配对：上方显示 prompt；下方两列视频（左 input，右 target）
-    const pairsHtml = `
-      <div>
-        ${q.pairs.map((p, idx) => {
-          const key = String(p.key || inferKey(p));
-          const prompt = prompts[key] || '';
-          const inputHtml = p.input ? `
-            <div class="video-card">
-              <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">Input（${escapeHtml(key)}）</div>
-              <video controls preload="metadata" src="${encodeURI(p.input)}"></video>
-            </div>
-          ` : `
-            <div class="video-card">
-              <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">Input 缺失（${escapeHtml(key)}）</div>
-              <div style="color:#97a6ba;font-size:12px;">未找到对应 input 视频</div>
-            </div>
-          `;
-          const targetHtml = `
-            <div class="video-card">
-              <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">题目视频（${escapeHtml(key)}）</div>
-              <video controls preload="metadata" src="${encodeURI(p.target)}"></video>
-            </div>
-          `;
-          return `
-            <div class="pair">
-              <div class="pair-title">Prompt：${escapeHtml(prompt)}</div>
-              <div class="pair-videos">
-                ${inputHtml}
-                ${targetHtml}
-              </div>
-            </div>
-          `;
-        }).join('')}
+    const promptText = prompts[kind] || '';
+    const refHtml = `
+      <div class="pair">
+        <div class="pair-title">Prompt：${escapeHtml(promptText)}</div>
+        <div class="pair-videos">
+          <div class="video-card">
+            <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">Input</div>
+            ${q.input
+              ? `<video controls preload="metadata" src="${encodeURI(q.input)}"></video>`
+              : `<div style="color:#97a6ba;font-size:12px;">未找到对应 input 视频</div>`}
+          </div>
+        </div>
       </div>
     `;
 
-    const attrResp = responses[q.id] || {};
-    const attrsHtml = `
-      <div class="attrs">
-        ${attributes.map(attr => {
-          const selected = Number(attrResp[attr.key] || 0);
-          const buttons = Array.from({ length: 7 }, (_, i) => {
-            const val = i + 1;
-            const sel = selected === val ? 'selected' : '';
-            return `<button class="btn ${sel}" data-score="${val}">${val}</button>`;
-          }).join('');
-          return `
-            <div class="attr-row" data-attr="${attr.key}">
-              <div class="attr-head">
-                <span class="attr-label">${escapeHtml(attr.label)}</span>
-                <span class="attr-desc">${escapeHtml(attr.desc || '（1=最好，7=最差）')}</span>
-              </div>
-              <div class="scale">${buttons}</div>
-            </div>
-          `;
-        }).join('')}
+    // 候选视频展示（仅标号，不显示文件夹名）
+    const candidatesHtml = `
+      <div class="videos">
+        ${q.candidates.map((c, i) => `
+          <div class="video-card">
+            <div style="color:#97a6ba;font-size:12px;margin:0 0 6px;">视频 ${i + 1}</div>
+            <video controls preload="metadata" src="${encodeURI(c.src)}"></video>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    // 初始化该题的排序响应（若不存在）
+    if (!responses[kind]) {
+      responses[kind] = { rankings: {} };
+      const ids = q.candidates.map(c => c.id + '|' + c.src); // 稳定标识
+      for (const attr of attributes) responses[kind].rankings[attr.key] = ids.slice(); // 初始顺序
+      saveState();
+    }
+
+    // 排序区域
+    const rankSectionsHtml = `
+      <div class="rank-sections">
+        ${attributes.map(attr => rankSectionHtml(kind, attr, q)).join('')}
       </div>
     `;
 
     els.q.innerHTML = `
       ${titleHtml}
-      ${pairsHtml}
-      ${attrsHtml}
+      ${refHtml}
+      ${candidatesHtml}
+      ${rankSectionsHtml}
     `;
 
-    els.q.querySelectorAll('.attr-row').forEach(row => {
-      const key = row.getAttribute('data-attr');
-      row.querySelectorAll('.scale .btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const score = Number(btn.getAttribute('data-score'));
-          selectScore(q.id, key, score, row, btn);
-        });
-      });
+    // 绑定拖拽
+    attributes.forEach(attr => bindRankDnD(kind, attr.key, q));
+    updateNavButtons();
+  }
+
+  function rankSectionHtml(kind, attr, q) {
+    const order = (responses[kind]?.rankings?.[attr.key]) || q.candidates.map(c => c.id + '|' + c.src);
+    const idToIndex = new Map(q.candidates.map((c, i) => [c.id + '|' + c.src, i]));
+    const items = order.map((cid, pos) => {
+      const i = idToIndex.get(cid) ?? 0;
+      return `
+        <li class="rank-item" draggable="true" data-id="${escapeHtml(cid)}" data-pos="${pos}">
+          <span class="order">${pos + 1}</span>
+          <span class="label">视频 ${i + 1}</span>
+        </li>
+      `;
+    }).join('');
+
+    return `
+      <section class="rank-section" data-attr="${attr.key}">
+        <div class="rank-title">${escapeHtml(attr.label)}</div>
+        <div class="rank-desc">${escapeHtml(attr.desc || '（1=最好，N=最差）')}</div>
+        <ol class="rank-list" id="rank-${attr.key}">
+          ${items}
+        </ol>
+      </section>
+    `;
+  }
+
+  function bindRankDnD(kind, attrKey, q) {
+    const list = document.getElementById(`rank-${attrKey}`);
+    if (!list) return;
+
+    let dragEl = null;
+
+    list.addEventListener('dragstart', (e) => {
+      const li = e.target.closest('.rank-item');
+      if (!li) return;
+      dragEl = li;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', li.dataset.id);
+      setTimeout(() => li.classList.add('dragging'), 0);
     });
 
-    updateNavButtons();
+    list.addEventListener('dragend', (e) => {
+      const li = e.target.closest('.rank-item');
+      if (li) li.classList.remove('dragging');
+      dragEl = null;
+    });
+
+    list.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const after = getDragAfterElement(list, e.clientY);
+      const dragging = list.querySelector('.dragging');
+      if (!dragging) return;
+      if (after == null) {
+        list.appendChild(dragging);
+      } else {
+        list.insertBefore(dragging, after);
+      }
+    });
+
+    list.addEventListener('drop', (e) => {
+      e.preventDefault();
+      // 根据当前列表顺序重建 order
+      const ids = Array.from(list.querySelectorAll('.rank-item')).map(li => li.dataset.id);
+      responses[kind].rankings[attrKey] = ids;
+      // 重绘序号
+      Array.from(list.querySelectorAll('.rank-item .order')).forEach((el, i) => el.textContent = String(i + 1));
+      saveState();
+      updateNavButtons();
+    });
   }
 
-  function inferKey(p) {
-    // 从 target 路径推断 key（去扩展名的文件名）
-    try {
-      const parts = String(p.target || '').split('/');
-      const f = parts[parts.length - 1] || '';
-      return f.split('.').slice(0, -1).join('.');
-    } catch { return ''; }
-  }
-
-  function selectScore(qid, attrKey, score, row, btn) {
-    if (!responses[qid]) responses[qid] = {};
-    responses[qid][attrKey] = score;
-    row.querySelectorAll('.scale .btn').forEach(b => b.classList.remove('selected'));
-    btn.classList.add('selected');
-    saveState();
-    updateNavButtons();
-  }
-
-  function allAttributesScored(qid) {
-    const r = responses[qid] || {};
-    return attributes.every(a => typeof r[a.key] === 'number' && r[a.key] >= 1 && r[a.key] <= 7);
+  function getDragAfterElement(container, y) {
+    const els = [...container.querySelectorAll('.rank-item:not(.dragging)')];
+    return els.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) {
+        return { offset, element: child };
+      } else {
+        return closest;
+      }
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
   }
 
   function hookNav() {
@@ -206,17 +253,25 @@
       }
     });
 
-    // 导出按钮不再使用
+    // 不使用导出
     els.exportBtn.style.display = 'none';
+  }
+
+  function isQuestionComplete(kind) {
+    const q = manifest.questions.find(qq => qq.kind === kind);
+    if (!q) return false;
+    const N = q.candidates.length;
+    const r = responses[kind]?.rankings || {};
+    return attributes.every(a => Array.isArray(r[a.key]) && r[a.key].length === N);
   }
 
   function updateNavButtons() {
     const isFirst = current === 0;
     const isLast = current === manifest.questions.length - 1;
-    const qid = manifest.questions[current].id;
+    const kind = manifest.questions[current].kind;
 
     els.prev.disabled = isFirst;
-    els.next.disabled = !allAttributesScored(qid);
+    els.next.disabled = !isQuestionComplete(kind);
     els.next.textContent = isLast ? '提交' : '下一题';
   }
 
@@ -225,10 +280,11 @@
       meta: {
         generatedAt: new Date().toISOString(),
         totalQuestions: manifest.questions.length,
+        kinds: manifest.questions.map(q => q.kind),
         attributes,
-        questions: manifest.questions.map(q => q.id),
         userAgent: navigator.userAgent,
       },
+      // 提交排序结果（不暴露文件夹名给用户界面，但后端数据包含 id/src）
       responses,
     };
 
@@ -236,10 +292,8 @@
       const fd = new FormData();
       fd.append('form-name', 'video-survey');
       fd.append('payload', JSON.stringify(payload));
-
       await fetch('/', { method: 'POST', body: fd });
 
-      // 清理并提示
       localStorage.removeItem(STORAGE_RESP);
       localStorage.removeItem(STORAGE_INDEX);
       setProgress('已提交，感谢参与！');
@@ -274,9 +328,7 @@
   }
 
   function setProgress(text) { els.progress.textContent = text; }
-
   function disableAll(disabled) { [els.prev, els.next, els.exportBtn].forEach(b => b.disabled = !!disabled); }
-
   function escapeHtml(s) {
     return String(s)
       .replaceAll('&', '&amp;')

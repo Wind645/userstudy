@@ -8,26 +8,19 @@ const VIDEOS_DIR = path.join(ROOT, 'videos');
 const MANIFEST_PATH = path.join(VIDEOS_DIR, 'manifest.json');
 
 const exts = new Set(['.mp4', '.webm', '.ogg', '.mov', '.m4v']);
-// 改为 3 个维度
+
+// 三个排序指标
 const attributes = [
-  { key: 'motion_preservation', label: 'motion preservation', desc: '动作保留程度（1=最好，7=最差）' },
-  { key: 'text_alignment', label: 'text alignment', desc: '视频文本对齐程度（1=最好，7=最差）' },
-  { key: 'generation_quality', label: 'generation quality', desc: '视频生成质量（1=最好，7=最差）' },
+  { key: 'motion_preservation', label: 'motion preservation', desc: '动作迁移程度（1=最好，N=最差）' },
+  { key: 'text_alignment', label: 'text alignment', desc: '视频文本对齐程度（1=最好，N=最差）' },
+  { key: 'generation_quality', label: 'generation quality', desc: '视频生成质量（1=最好，N=最差）' },
 ];
 
-const EXPECTED_KEYS = ['camera_motion', 'complex_human_motion', 'single_object', 'multiple_objects'];
+const KINDS = ['camera_motion', 'complex_human_motion', 'single_object', 'multiple_objects'];
 
-async function ensureDir(dir) {
-  try { await fs.mkdir(dir, { recursive: true }); } catch {}
-}
-
-function toPosix(p) {
-  return p.split(path.sep).join(path.posix.sep);
-}
-
-function baseNoExt(filename) {
-  return path.parse(filename).name.toLowerCase();
-}
+async function ensureDir(dir) { try { await fs.mkdir(dir, { recursive: true }); } catch {} }
+function toPosix(p) { return p.split(path.sep).join(path.posix.sep); }
+function baseNoExt(filename) { return path.parse(filename).name.toLowerCase(); }
 
 async function listVideos(dir) {
   const items = await fs.readdir(dir, { withFileTypes: true });
@@ -41,59 +34,46 @@ async function main() {
   await ensureDir(VIDEOS_DIR);
 
   const entries = await fs.readdir(VIDEOS_DIR, { withFileTypes: true });
-  // 收集 input 目录
+
+  // 收集 input 参考
   const INPUT_DIR = path.join(VIDEOS_DIR, 'input');
   const hasInput = entries.some(e => e.isDirectory() && e.name === 'input');
   const inputMap = new Map();
   if (hasInput) {
     const inputFiles = await listVideos(INPUT_DIR);
-    for (const f of inputFiles) {
-      inputMap.set(baseNoExt(f), toPosix(path.join('videos', 'input', f)));
-    }
+    for (const f of inputFiles) inputMap.set(baseNoExt(f), toPosix(path.join('videos', 'input', f)));
   } else {
-    console.warn('[warn] 未发现 videos/input 目录，将无法配对参考视频。');
+    console.warn('[warn] 未发现 videos/input 目录，将无法展示参考视频。');
   }
 
-  // 题目目录，排除 input
-  const folders = entries
-    .filter(e => e.isDirectory() && e.name !== 'input')
-    .map(e => e.name)
-    .sort();
+  // 候选来源目录（排除 input）
+  const folders = entries.filter(e => e.isDirectory() && e.name !== 'input').map(e => e.name).sort();
+  const kindToCandidates = new Map(KINDS.map(k => [k, []]));
 
-  const questions = [];
-
+  // 遍历每个子文件夹，将四类视频分发到对应类别的候选池
   for (const folder of folders) {
-    const full = path.join(VIDEOS_DIR, folder);
-    const files = await listVideos(full);
+    const folderDir = path.join(VIDEOS_DIR, folder);
+    const files = await listVideos(folderDir);
     if (files.length === 0) continue;
 
-    // 以预期 4 个 key 的顺序构建配对
     const byBase = new Map(files.map(f => [baseNoExt(f), f]));
-    const pairs = [];
-
-    for (const key of EXPECTED_KEYS) {
-      const targetFile = byBase.get(key);
-      if (!targetFile) {
-        console.warn(`[warn] 目录 ${folder} 缺少 ${key} 对应视频，将跳过该项。`);
-        continue;
-      }
-      const targetSrc = toPosix(path.join('videos', folder, targetFile));
-      const inputSrc = inputMap.get(key);
-      if (!inputSrc) {
-        console.warn(`[warn] input 目录缺少 ${key} 视频，题目 ${folder} 的该配对将仅包含目标视频。`);
-      }
-      pairs.push({ key, target: targetSrc, input: inputSrc || null });
-    }
-
-    // 仅保留前 4 个预期项
-    if (pairs.length > 0) {
-      questions.push({ id: folder, pairs });
+    for (const kind of KINDS) {
+      const file = byBase.get(kind);
+      if (!file) continue;
+      const src = toPosix(path.join('videos', folder, file));
+      kindToCandidates.get(kind).push({ id: folder, src });
     }
   }
+
+  // 组装四道题：每题至多取 8 个候选
+  const questions = KINDS.map(kind => {
+    const candidates = (kindToCandidates.get(kind) || []).slice(0, 8);
+    const input = inputMap.get(kind) || null;
+    return { id: kind, kind, input, candidates };
+  });
 
   const manifest = { attributes, questions };
   await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8');
-
   console.log(`[ok] 生成清单：${path.relative(ROOT, MANIFEST_PATH)}，题目数：${questions.length}`);
 }
 
