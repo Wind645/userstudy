@@ -21,6 +21,13 @@ const KINDS = ['camera_motion', 'complex_human_motion', 'single_object', 'multip
 async function ensureDir(dir) { try { await fs.mkdir(dir, { recursive: true }); } catch {} }
 function toPosix(p) { return p.split(path.sep).join(path.posix.sep); }
 function baseNoExt(filename) { return path.parse(filename).name.toLowerCase(); }
+function normalizeKey(s) {
+  return String(s)
+    .toLowerCase()
+    .replace(/[\s_\-]+/g, '')        // 去掉空格/下划线/连字符
+    .replace(/\(\d+\)|\[\d+\]/g, '')  // 去掉(1)/[1]等
+    .replace(/copy|副本/g, '');       // 常见复制后缀
+}
 
 async function listVideos(dir) {
   const items = await fs.readdir(dir, { withFileTypes: true });
@@ -63,11 +70,15 @@ async function main() {
     const files = await listVideos(folderDir);
     if (files.length === 0) continue;
 
-    const byBase = new Map(files.map(f => [baseNoExt(f), f]));
+    // 放宽匹配：精确(normalized)优先，否则接受以类别名为前缀的匹配
+    const fileInfos = files.map(f => ({ file: f, base: baseNoExt(f), key: normalizeKey(baseNoExt(f)) }));
     for (const kind of KINDS) {
-      const file = byBase.get(kind);
-      if (!file) continue;
-      const src = toPosix(path.join('videos', folder, file));
+      const nk = normalizeKey(kind);
+      const exact = fileInfos.find(x => x.key === nk);
+      const prefix = exact || fileInfos.find(x => x.key.startsWith(nk));
+      const hit = prefix;
+      if (!hit) continue;
+      const src = toPosix(path.join('videos', folder, hit.file));
       kindToCandidates.get(kind).push({ id: folder, src });
     }
   }

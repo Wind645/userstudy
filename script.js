@@ -146,7 +146,7 @@
       ${rankSectionsHtml}
     `;
 
-    // 绑定视频加载失败处理：剔除无效候选，避免空位
+    // 视频加载失败时保留占位
     attachVideoErrorHandlers(q);
 
     // 绑定拖拽
@@ -154,30 +154,18 @@
     updateNavButtons();
   }
 
-  // 当候选或参考视频加载失败时的处理
+  // 当候选或参考视频加载失败时的处理（不再删除候选）
   function attachVideoErrorHandlers(q) {
-    // 候选视频：加载失败即从候选与排序中移除并重绘
+    // 候选视频：加载失败，用占位文本替代，保留排序项
     document.querySelectorAll('.videos .video-card video').forEach(v => {
       v.addEventListener('error', () => {
-        const cid = v.dataset.cid;
-        if (!cid) return;
-        const kind = q.kind;
-
-        // 从候选中移除
-        const idx = q.candidates.findIndex(c => (c.id + '|' + c.src) === cid);
-        if (idx === -1) return;
-        q.candidates.splice(idx, 1);
-
-        // 从各排序列表中移除
-        for (const attr of attributes) {
-          const arr = responses[kind]?.rankings?.[attr.key];
-          if (Array.isArray(arr)) {
-            responses[kind].rankings[attr.key] = arr.filter(x => x !== cid);
-          }
-        }
-
-        saveState();
-        render();
+        const wrap = v.parentElement;
+        if (!wrap) return;
+        wrap.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:center;height:180px;background:#000;border-radius:8px;color:#97a6ba;font-size:12px;text-align:center;padding:8px;">
+            视频加载失败或浏览器不支持该格式
+          </div>
+        `;
       }, { once: true });
     });
 
